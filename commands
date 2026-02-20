@@ -1,0 +1,11 @@
+python -m venv .venv
+.venv\Scripts\activate.bat
+.venv\Scripts\Activate.ps1
+
+Get-ExecutionPolicy -List
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope CurrentUser
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope LocalMachine
+
+
+
+pip install "fastapi[standard]"
