@@ -15,30 +15,7 @@ def run_nmap(ipaddress: str) -> List[Dict]:
         print(f"Error: {result.stderr}")
         return []
 
-    return parse_nmap_xml(result.stdout)
-
-
-def parse_nmap_xml(xml_data: str) -> List[Dict]:
-    root = ET.fromstring(xml_data)
-    findings = []
-
-    for port in root.iter("port"):
-        state = port.find("state").attrib["state"]
-
-        if state == "open":
-            portid = port.attrib["portid"]
-            protocol = port.attrib["protocol"]
-
-            service_element = port.find("service")
-            service_name = service_element.attrib.get("name", "unknown")
-
-            findings.append({
-                "port": int(portid),
-                "protocol": protocol,
-                "service": service_name
-            })
-
-    return findings
+    return result.stdout
 
 def fetch_host() -> dict:
     info = {"hostname": "", "ip_addr": ""}

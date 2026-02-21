@@ -1,13 +1,9 @@
-from fastapi import FastAPI
-import classes
+from fastapi import FastAPI, HTTPException, Header
+from classes import Host, RawData, TaskList, ThreatList
 import uuid
+from parser import parse_scan_line
+from helpers import authenticate, task_manager, tempStorage
 
-tempStorage = {
-    "clients": {},
-    "scans": {},
-    "tasks": {},
-    "fixes": {}
-}
 app = FastAPI()
 
 @app.get("/")
@@ -15,35 +11,51 @@ async def root():
     return {"message": "Hello World"}
 
 # fetches scan results of a given client, forms tasks that can be run, saves it in database and waits for given client to fetch the result
-@app.get("/tasks/{host_id}")
-async def get_tasks(host_id: int):
+@app.get("/tasks")
+async def get_tasks(token: str):
+    host_id = authenticate(token)
     if host_id in tempStorage["clients"]:
-        return {"status": "ok", "tasks": tempStorage.get("scans", {}).get(host_id, [])}
+        task_list = TaskList()
+        for threat in tempStorage["scans"][host_id]:
+            print(threat)
+            task = task_manager(threat)
+            task_list.tasks.append(task)
+
+        return task_list
     else:
-        return classes.Response.error
+        raise HTTPException(status_code=404, detail="Not found")
 
 # registers the client machine, returns a token for it, adds the machine to database
 @app.post("/register")
-async def register_client(client: classes.Host):
+async def register_client(client: Host):
     host_id = str(uuid.uuid4())
     token = str(uuid.uuid4())
-    print(client)
     tempStorage["clients"][host_id] = {
         "client": client,
         "token": token
     }
-    print(tempStorage)
-    return token
+    tempStorage["scans"][host_id] = []
+    tempStorage["fixes"][host_id] = []
+    tempStorage["tasks"][host_id] = []
+    return token, host_id
 
 # client sends scan results here
 @app.post("/scan-results")
-async def add_scan(scan: classes.Issue):
-    tempStorage["scans"][scan.host.host_id] = scan
-    return scan
+async def add_scan(raw: RawData, authorization: str = Header(...)):
+    host_id = authenticate(authorization)
+    for line in raw.scan_data:
+        threat = parse_scan_line(line)
+        tempStorage["scans"][host_id].append(threat)
+    return {"detail": "Success"}
 
 # client sends applied fixes results here
 @app.post("/fix-results")
-async def add_fix(fix: classes.Issue):
-    host_id = fix.host.host_id
-    tempStorage.setdefault("fixes", {})[host_id] = fix
-    return {"status": "ok", "fix": fix}
+async def add_fix(data: RawData, authorization: str = Header(...)):
+    host_id = authenticate(authorization)
+    
+    tempStorage["fixes"][host_id].append(data)
+    return {"detail": "Success"}
+
+
+
+
