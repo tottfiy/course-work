@@ -12,8 +12,8 @@ async def root():
 
 # fetches scan results of a given client, forms tasks that can be run, saves it in database and waits for given client to fetch the result
 @app.get("/tasks")
-async def get_tasks(token: str):
-    host_id = authenticate(token)
+async def get_tasks(authorization: str = Header(...)):
+    host_id = authenticate(authorization)
     if host_id in tempStorage["clients"]:
         task_list = TaskList()
         for threat in tempStorage["scans"][host_id]:
@@ -43,7 +43,7 @@ async def register_client(client: Host):
 @app.post("/scan-results")
 async def add_scan(raw: RawData, authorization: str = Header(...)):
     host_id = authenticate(authorization)
-    for line in raw.scan_data:
+    for line in raw.data:
         threat = parse_scan_line(line)
         tempStorage["scans"][host_id].append(threat)
     return {"detail": "Success"}

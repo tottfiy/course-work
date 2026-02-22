@@ -11,7 +11,6 @@ tempStorage = {
 
 def authenticate(token: str) -> str:
     for host_id, data in tempStorage["clients"].items():
-        print(host_id, data)
         if data['token'] == token:
             return host_id
     raise HTTPException(status_code=401, detail="Unauthorized")
