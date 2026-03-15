@@ -1,0 +1,574 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Run</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+
+<body>
+
+  
+<div class="app">
+  <header class="topbar">
+    <a class="backlink" href="/">← Back</a>
+
+    <div class="brand">
+      <div class="brand-row">
+        <div class="logo">LS</div>
+        <div>
+          <h1>Scan <span class="muted">#</span><span id="rid"></span></h1>
+          <div class="subtitle" id="runSubtitle"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="topbar-actions">
+      <span class="chip" id="runStatusPill">—</span>
+    </div>
+  </header>
+
+  <div class="layout-run">
+
+    <aside class="panel sidebar">
+      <div class="panel-head">
+        <h2>Tools</h2>
+        <div class="hint">Click to view output</div>
+      </div>
+
+      <div id="toolList" class="tool-list"></div>
+    </aside>
+
+
+    <main class="panel viewer">
+      <div class="viewer-head">
+        <div class="viewer-title">
+          <div class="kicker">Selected tool</div>
+          <div class="hrow">
+            <div id="activeToolName" class="active-tool">—</div>
+            <div class="hchips">
+              <span id="activeRc" class="chip chip-ghost">—</span>
+              <span id="activeDur" class="chip chip-ghost">—</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="viewer-tabs" role="tablist">
+          <button class="tab active" data-tab="results">Results</button>
+          <button class="tab" data-tab="output">Raw Output</button>
+          <button class="tab" data-tab="errors">Errors</button>
+        </div>
+      </div>
+
+
+      <section class="tabpane active" id="tab-results">
+        <div class="results-wrap">
+          <div class="results-head">
+            <div>
+              <div class="results-title">Results</div>
+              <div class="hint">Parsed view (when supported). Raw output is still available.</div>
+            </div>
+            <div class="results-metrics">
+              <span class="chip chip-ghost" id="resOpenPorts">Open: —</span>
+              <span class="chip chip-ghost" id="resServices">Services: —</span>
+            </div>
+          </div>
+
+          <div id="resultsBody" class="results-body">
+            <div class="empty">Select a tool to see results.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="tabpane" id="tab-output">
+        <div class="terminal-shell">
+          <div class="terminal-top">
+            <div class="dots">
+              <span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+            </div>
+            <div class="term-title" id="termTitle">stdout</div>
+            <div class="term-meta">Rendered stdout (ansi)</div>
+          </div>
+
+          <div class="terminal" id="terminal">
+            <div id="file" class="terminal-output"></div>
+          </div>
+        </div>
+      </section>
+
+
+      <section class="tabpane" id="tab-errors">
+        <div class="terminal-shell">
+          <div class="terminal-top">
+            <div class="dots">
+              <span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+            </div>
+            <div class="term-title" id="termTitleErr">stderr</div>
+            <div class="term-meta">Rendered stderr (ansi)</div>
+          </div>
+
+          <div class="terminal" id="terminalErr">
+            <div id="fileErr" class="terminal-output"></div>
+          </div>
+        </div>
+      </section>
+
+
+      <section class="tabpane" id="tab-highlights">
+        <div class="highlights-wrap">
+          <div class="high-card">
+            <div class="high-head">
+              <div class="high-title">Quick highlights</div>
+              <div class="hint">Derived from tool summary (not raw parsing)</div>
+            </div>
+            <div id="highlightsBox" class="high-body">
+              <div class="hint">Select a tool to see highlights.</div>
+            </div>
+          </div>
+
+          <div class="high-card">
+            <div class="high-head">
+              <div class="high-title">Run summary</div>
+              <div class="hint">Timing and tool status</div>
+            </div>
+            <div id="metaCards" class="meta-cards meta-cards-2"></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<script>
+const runId = "{{ run_id }}";
+document.getElementById("rid").textContent = runId;
+
+let selectedTool = null;
+let selectedStdoutPath = null;
+let selectedStderrPath = null;
+let lastContentHash = null;
+let lastErrHash = null;
+let lastMeta = null;
+let lastStdoutPlain = "";
+let lastStderrPlain = "";
+
+function shouldStickToBottom(el){
+  const threshold = 60;
+  return (el.scrollHeight - el.scrollTop - el.clientHeight) < threshold;
+}
+
+async function fetchMeta(){
+  return fetch(`/api/runs/${runId}`).then(r => r.json());
+}
+
+async function fetchFile(relpath){
+  const url = `/api/runs/${runId}/file?relpath=${encodeURIComponent(relpath)}`;
+  const r = await fetch(url);
+  if(!r.ok) return null;
+  return r.text(); 
+}
+
+function htmlToText(html){
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html || "";
+  return (tmp.textContent || "").replace(/\r\n/g, "\n");
+}
+
+function stableHash(s){
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return String(h);
+}
+
+function fmtDur(sec){
+  if(sec == null || isNaN(sec)) return "—";
+  sec = Number(sec);
+  if(sec < 60) return `${sec.toFixed(1)}s`;
+  const m = Math.floor(sec/60);
+  const s = Math.round(sec%60);
+  return `${m}m ${s}s`;
+}
+
+function escapeHtml(str){
+  return String(str ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+function setRunPill(meta){
+  const status = (meta.status || "unknown").toLowerCase();
+  const el = document.getElementById("runStatusPill");
+  el.className = "chip";
+  if(status === "running"){ el.classList.add("chip-run"); el.textContent = "RUNNING"; }
+  else if(status === "done"){ el.classList.add("chip-ok"); el.textContent = "DONE"; }
+  else if(status === "queued"){ el.classList.add("chip-warn"); el.textContent = "QUEUED"; }
+  else { el.classList.add("chip-ghost"); el.textContent = String(meta.status || "UNKNOWN").toUpperCase(); }
+
+  const subtitle = [];
+  if(meta.started_at) subtitle.push(`Started: ${meta.started_at}`);
+  if(meta.finished_at) subtitle.push(`Finished: ${meta.finished_at}`);
+  document.getElementById("runSubtitle").textContent = subtitle.join(" • ");
+}
+
+function renderMetaCards(meta){
+  const box = document.getElementById("metaCards");
+  box.innerHTML = "";
+
+  const started = meta.started_at || "—";
+  const finished = meta.finished_at || "—";
+
+  let duration = "—";
+  try{
+    if(meta.tools && Array.isArray(meta.tools)){
+      const total = meta.tools.reduce((acc,t)=>acc + (Number(t.duration_sec)||0), 0);
+      duration = fmtDur(total);
+    }
+  }catch(e){}
+
+  const items = [
+    {k:"Run ID", v: meta.run_id || runId},
+    {k:"Started", v: started},
+    {k:"Finished", v: finished},
+    {k:"Total tool time", v: duration},
+  ];
+
+  items.forEach(it=>{
+    const c = document.createElement("div");
+    c.className="meta-card";
+    c.innerHTML = `<div class="meta-k">${escapeHtml(it.k)}</div><div class="meta-v">${escapeHtml(it.v)}</div>`;
+    box.appendChild(c);
+  });
+}
+
+function rcChip(rc){
+  if(rc === 0) return {cls:"chip chip-ok", text:"OK"};
+  if(rc === 124) return {cls:"chip chip-warn", text:"TIMEOUT"};
+  if(rc == null) return {cls:"chip chip-ghost", text:"—"};
+  return {cls:"chip chip-bad", text:`RC ${rc}`};
+}
+
+function renderToolList(meta){
+  const list = document.getElementById("toolList");
+  list.innerHTML = "";
+
+  const tools = meta.tools || [];
+  if(!tools.length){
+    const empty = document.createElement("div");
+    empty.className="hint";
+    empty.textContent="No tools finished yet.";
+    list.appendChild(empty);
+    return;
+  }
+
+  tools.forEach(t=>{
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "tool-item";
+    item.dataset.tool = t.name;
+
+    const stdoutPath = t.stdout_file;
+    const stderrPath = t.stderr_file;
+    const disabled = !stdoutPath;
+    if(disabled){
+      item.classList.add("disabled");
+      item.disabled = true;
+    }
+
+    const chip = rcChip(t.rc);
+    const dur = fmtDur(t.duration_sec);
+
+    const small = [];
+    if(t.summary?.open_count != null) small.push(`Open: ${t.summary.open_count}`);
+    if(t.summary?.findings != null) small.push(`Findings: ${t.summary.findings}`);
+    if(t.summary?.issues != null) small.push(`Issues: ${t.summary.issues}`);
+    if(t.summary?.vulns != null) small.push(`Vulns: ${t.summary.vulns}`);
+
+    item.innerHTML = `
+      <div class="tool-item-left">
+        <div class="tool-item-name">${escapeHtml(t.name)}</div>
+        <div class="tool-item-sub">${escapeHtml(small.join(" • ") || (disabled ? (t.error || "No stdout") : "stdout available"))}</div>
+      </div>
+      <div class="tool-item-right">
+        <span class="${chip.cls}">${escapeHtml(chip.text)}</span>
+        <span class="chip chip-ghost">${escapeHtml(dur)}</span>
+      </div>
+    `;
+
+    item.onclick = ()=>{
+      selectedTool = t.name;
+      selectedStdoutPath = stdoutPath;
+      selectedStderrPath = stderrPath;
+      lastContentHash = null;
+      lastErrHash = null;
+
+      lastStdoutPlain = "";
+      lastStderrPlain = "";
+
+      setActiveToolUI(t);
+      refreshLogs(meta);
+      setActiveSidebarSelection();
+    };
+
+    list.appendChild(item);
+  });
+
+  if(!selectedTool){
+    const first = tools.find(x=>x.stdout_file);
+    if(first){
+      selectedTool = first.name;
+      selectedStdoutPath = first.stdout_file;
+      selectedStderrPath = first.stderr_file;
+      setActiveToolUI(first);
+    }
+  }
+  setActiveSidebarSelection();
+}
+
+function setActiveSidebarSelection(){
+  document.querySelectorAll(".tool-item").forEach(b=>{
+    b.classList.toggle("active", b.dataset.tool === selectedTool);
+  });
+}
+
+function setActiveToolUI(tool){
+  document.getElementById("activeToolName").textContent = tool?.name || "—";
+  const chip = rcChip(tool?.rc);
+  const rcEl = document.getElementById("activeRc");
+  rcEl.className = chip.cls;
+  rcEl.textContent = chip.text;
+
+  const durEl = document.getElementById("activeDur");
+  durEl.className = "chip chip-ghost";
+  durEl.textContent = fmtDur(tool?.duration_sec);
+
+  document.getElementById("termTitle").textContent = tool?.name ? `${tool.name} • stdout` : "stdout";
+  document.getElementById("termTitleErr").textContent = tool?.name ? `${tool.name} • stderr` : "stderr";
+
+
+  const hb = document.getElementById("highlightsBox");
+  hb.innerHTML = "";
+
+  const highlights =
+    (tool?.summary && (tool.summary.open_ports || tool.summary.samples || tool.summary.warnings || tool.summary.highlights || tool.summary.summary || tool.summary.detections || tool.summary.open_lines)) || null;
+
+  if(Array.isArray(highlights) && highlights.length){
+    const ul = document.createElement("ul");
+    ul.className="pretty-list";
+    highlights.slice(0, 18).forEach(h=>{
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="bullet"></span><span>${escapeHtml(h)}</span>`;
+      ul.appendChild(li);
+    });
+    hb.appendChild(ul);
+  } else {
+    const grid = document.createElement("div");
+    grid.className = "kv-grid";
+    const items = [];
+
+    if(tool?.summary?.open_count != null) items.push(["Open ports", String(tool.summary.open_count)]);
+    if(tool?.summary?.findings != null) items.push(["Findings", String(tool.summary.findings)]);
+    if(tool?.summary?.issues != null) items.push(["Issues", String(tool.summary.issues)]);
+    if(tool?.summary?.vulns != null) items.push(["Vulns", String(tool.summary.vulns)]);
+
+    if(items.length){
+      items.forEach(([k,v])=>{
+        const row = document.createElement("div");
+        row.className="kv";
+        row.innerHTML = `<div class="kv-k">${escapeHtml(k)}</div><div class="kv-v">${escapeHtml(v)}</div>`;
+        grid.appendChild(row);
+      });
+      hb.appendChild(grid);
+    } else {
+      hb.innerHTML = `<div class="hint">No structured highlights available for this tool yet.</div>`;
+    }
+  }
+}
+
+function emptyStdoutMessage(){
+  return `
+    <div class="empty">
+      <div style="font-weight:800; margin-bottom:6px;">Nothing was found.</div>
+      <div class="hint">Try checking the <b>Errors</b> tab (stderr) for more details.</div>
+    </div>
+  `;
+}
+
+async function renderResults(meta, tool){
+  const hb = document.getElementById("resultsBody");
+  const openChip = document.getElementById("resOpenPorts");
+  const svcChip = document.getElementById("resServices");
+  openChip.textContent = "Open: —";
+  svcChip.textContent = "Services: —";
+
+
+  if(tool?.parsed_file){
+    const parsedHtml = await fetchFile(tool.parsed_file);
+    const parsedText = parsedHtml ? htmlToText(parsedHtml) : "";
+    try{
+      const parsed = JSON.parse(parsedText);
+
+  
+      if(tool.name === "Nmap" && parsed && Array.isArray(parsed.open_ports)){
+        const ports = parsed.open_ports || [];
+        openChip.textContent = `Open: ${parsed.open_count ?? ports.length}`;
+        svcChip.textContent = `Services: ${ports.length}`;
+        if(!ports.length){
+          hb.innerHTML = `<div class="empty">No open ports found.</div>`;
+          return;
+        }
+        const rows = ports
+          .sort((a,b)=> Number(a.portid||0) - Number(b.portid||0))
+          .map(p=>{
+            const svc = p.service || {};
+            const svcName = svc.name || "unknown";
+            const extra = [svc.product, svc.version, svc.extrainfo].filter(Boolean).join(" ");
+            const scripts = (p.scripts || []).slice(0,3).map(s=>{
+              const out = s.output ? ` — ${escapeHtml(s.output)}` : "";
+              return `<div class="script-row"><span class="badge">${escapeHtml(s.id||"")}</span><span class="script-out">${out}</span></div>`;
+            }).join("");
+            return `
+              <div class="res-row">
+                <div class="res-left">
+                  <div class="res-primary">
+                    <span class="state state-open">open</span>
+                    <span class="port">${escapeHtml(p.portid||"")}/${escapeHtml(p.proto||"")}</span>
+                    <span class="svc">${escapeHtml(svcName)}</span>
+                  </div>
+                  <div class="res-secondary">${escapeHtml(extra || "")}</div>
+                </div>
+                <div class="res-right">${scripts || `<div class="hint">No scripts</div>`}</div>
+              </div>
+            `;
+          }).join("");
+        hb.innerHTML = `<div class="res-table">${rows}</div>`;
+        return;
+      }
+
+
+      if(tool.name === "ZMap" && parsed && (parsed.responses != null || Array.isArray(parsed.ips))){
+        const ips = parsed.ips || [];
+        hb.innerHTML = `
+          <div class="kv-grid">
+            <div class="kv"><div class="kv-k">Responses</div><div class="kv-v">${escapeHtml(String(parsed.responses ?? ips.length))}</div></div>
+          </div>
+          ${ips.length ? `<ul class="pretty-list">${ips.slice(0,30).map(x=>`<li><span class="bullet"></span><span>${escapeHtml(x)}</span></li>`).join("")}</ul>` : `<div class="empty">No responses (try a different port/interface).</div>`}
+        `;
+        return;
+      }
+
+   
+    } catch(e){
+
+    }
+  }
+
+  const highlights =
+    (tool?.summary && (tool.summary.open_ports || tool.summary.samples || tool.summary.warnings || tool.summary.highlights || tool.summary.summary || tool.summary.detections || tool.summary.open_lines)) || null;
+
+  if(Array.isArray(highlights) && highlights.length){
+    hb.innerHTML = `<ul class="pretty-list">` + highlights.slice(0,30).map(x=>(
+      `<li><span class="bullet"></span><span>${escapeHtml(x)}</span></li>`
+    )).join("") + `</ul>`;
+  } else {
+    hb.innerHTML = `<div class="empty">No structured results. Use Raw Output / Errors.</div>`;
+  }
+}
+
+async function refreshLogs(meta){
+  const tool = (meta.tools || []).find(x=>x.name===selectedTool);
+
+
+if(selectedStdoutPath){
+  const terminal = document.getElementById("terminal");
+  const stick = shouldStickToBottom(terminal);
+  const html = await fetchFile(selectedStdoutPath);
+  if(html !== null){
+    const h = stableHash(html);
+    if(h !== lastContentHash){
+      const plain = htmlToText(html).trim();
+      lastStdoutPlain = plain;
+
+
+      const done = (meta.status || "").toLowerCase() === "done";
+      const bothEmpty = !lastStdoutPlain && !lastStderrPlain;
+
+      if(done && bothEmpty){
+        document.getElementById("file").innerHTML = emptyStdoutMessage();
+      } else {
+        document.getElementById("file").innerHTML = html;
+      }
+
+      lastContentHash = h;
+      if((meta.status || "").toLowerCase() === "running" && stick){
+        terminal.scrollTop = terminal.scrollHeight;
+      }
+    }
+  }
+}
+
+
+if(selectedStderrPath){
+  const term = document.getElementById("terminalErr");
+  const stick = shouldStickToBottom(term);
+  const html = await fetchFile(selectedStderrPath);
+  if(html !== null){
+    const h = stableHash(html);
+    if(h !== lastErrHash){
+      const plain = htmlToText(html).trim();
+      lastStderrPlain = plain;
+
+      document.getElementById("fileErr").innerHTML =
+        plain ? html : `<div class="empty">No errors (stderr is empty).</div>`;
+
+      lastErrHash = h;
+      if((meta.status || "").toLowerCase() === "running" && stick){
+        term.scrollTop = term.scrollHeight;
+      }
+    }
+  }
+}
+
+
+  if(tool){
+    await renderResults(meta, tool);
+  }
+}
+
+function setActiveTab(tab){
+  document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll(".tabpane").forEach(p=>p.classList.remove("active"));
+  document.getElementById(`tab-${tab}`).classList.add("active");
+}
+
+document.querySelectorAll(".tab").forEach(b=>{
+  b.onclick = ()=>setActiveTab(b.dataset.tab);
+});
+
+async function refresh(){
+  const meta = await fetchMeta();
+  lastMeta = meta;
+
+  setRunPill(meta);
+  renderMetaCards(meta);
+  renderToolList(meta);
+
+
+  const tools = meta.tools || [];
+  const active = tools.find(x=>x.name === selectedTool) || tools.find(x=>x.stdout_file);
+  if(active){
+    selectedTool = active.name;
+    selectedStdoutPath = active.stdout_file;
+    selectedStderrPath = active.stderr_file;
+    setActiveToolUI(active);
+    setActiveSidebarSelection();
+  }
+
+  await refreshLogs(meta);
+}
+
+refresh();
+setInterval(refresh, 1500);
+</script>
+</body>
+</html>
