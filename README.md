@@ -12,11 +12,14 @@ pip install -r requirements.txt
 
 ## Run
 
-### Recommended 
-Root-required tools will be executed via `sudo -n` (non-interactive). If your sudo prompts
-for a password, the tool will fail and you'll see the reason in the **Errors** tab.
-
 ```bash
 source venv/bin/activate
 python -m uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+### Alternative (run the whole server as root)
+If you prefer to run everything as root, use the venv python so uvicorn is found:
+
+```bash
+sudo -E ./venv/bin/python -m uvicorn app:app --host 0.0.0.0 --port 8000
 ```

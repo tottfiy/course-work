@@ -4,8 +4,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-BASE_DIR = Path(__file__).resolve().parent
-LOG_DIR = BASE_DIR / "logs"
+CODE_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = CODE_DIR.parent
+LOG_DIR = PROJECT_DIR / "logs"
 
 
 def ensure_dirs() -> None:

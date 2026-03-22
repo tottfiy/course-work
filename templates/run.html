@@ -31,7 +31,6 @@
   </header>
 
   <div class="layout-run">
-
     <aside class="panel sidebar">
       <div class="panel-head">
         <h2>Tools</h2>
@@ -41,7 +40,7 @@
       <div id="toolList" class="tool-list"></div>
     </aside>
 
-
+    <!-- Main: viewer -->
     <main class="panel viewer">
       <div class="viewer-head">
         <div class="viewer-title">
@@ -62,7 +61,6 @@
         </div>
       </div>
 
-
       <section class="tabpane active" id="tab-results">
         <div class="results-wrap">
           <div class="results-head">
@@ -81,7 +79,7 @@
           </div>
         </div>
       </section>
-
+      <!-- Output tab -->
       <section class="tabpane" id="tab-output">
         <div class="terminal-shell">
           <div class="terminal-top">
@@ -97,7 +95,6 @@
           </div>
         </div>
       </section>
-
 
       <section class="tabpane" id="tab-errors">
         <div class="terminal-shell">
@@ -115,7 +112,7 @@
         </div>
       </section>
 
-
+   
       <section class="tabpane" id="tab-highlights">
         <div class="highlights-wrap">
           <div class="high-card">
@@ -194,6 +191,81 @@ function fmtDur(sec){
 
 function escapeHtml(str){
   return String(str ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+function renderKvGrid(items){
+  const rows = (items || []).filter(x => x && x[1] != null && x[1] !== "");
+  if(!rows.length) return "";
+  return `<div class="kv-grid">` + rows.map(([k,v]) => `
+    <div class="kv"><div class="kv-k">${escapeHtml(k)}</div><div class="kv-v">${escapeHtml(String(v))}</div></div>
+  `).join("") + `</div>`;
+}
+
+function renderPrettyList(items){
+  const rows = (items || []).filter(Boolean);
+  if(!rows.length) return "";
+  return `<ul class="pretty-list">` + rows.slice(0,30).map(x => (
+    `<li><span class="bullet"></span><span>${escapeHtml(x)}</span></li>`
+  )).join("") + `</ul>`;
+}
+
+function getSemgrepSamples(parsed){
+  const results = Array.isArray(parsed?.results) ? parsed.results : [];
+  return results.slice(0, 20).map(r => {
+    const sev = r?.extra?.severity || "INFO";
+    const check = r?.check_id || "rule";
+    const path = r?.path || "";
+    const line = r?.start?.line || "?";
+    const msg = r?.extra?.message || "";
+    return `${sev} • ${check} • ${path}:${line}${msg ? ` — ${msg}` : ""}`;
+  });
+}
+
+function getBanditSamples(parsed){
+  const results = Array.isArray(parsed?.results) ? parsed.results : [];
+  return results.slice(0, 20).map(r => {
+    const sev = r?.issue_severity || "INFO";
+    const test = r?.test_id || "test";
+    const path = r?.filename || "";
+    const line = r?.line_number || "?";
+    const msg = r?.issue_text || "";
+    return `${sev} • ${test} • ${path}:${line}${msg ? ` — ${msg}` : ""}`;
+  });
+}
+
+function renderGenericStructured(tool, parsed){
+  const summary = tool?.summary || {};
+  const severity = summary.severity && typeof summary.severity === "object" ? summary.severity : null;
+  const metrics = [];
+
+  Object.entries(summary).forEach(([k, v]) => {
+    if(Array.isArray(v) || (v && typeof v === "object")) return;
+    metrics.push([k.replace(/_/g, " "), v]);
+  });
+
+  if(severity){
+    Object.entries(severity).forEach(([k, v]) => metrics.push([`severity ${k}`, v]));
+  }
+
+  let samples = [];
+  if(tool?.name === "Semgrep"){
+    samples = getSemgrepSamples(parsed);
+  } else if(tool?.name === "Bandit"){
+    samples = getBanditSamples(parsed);
+  } else if(Array.isArray(summary.samples)){
+    samples = summary.samples;
+  } else if(Array.isArray(summary.highlights)){
+    samples = summary.highlights;
+  } else if(Array.isArray(summary.open_lines)){
+    samples = summary.open_lines;
+  }
+
+  const kv = renderKvGrid(metrics);
+  const lst = renderPrettyList(samples);
+  if(kv || lst){
+    return kv + (lst || `<div class="hint">No sample findings available in parsed output.</div>`);
+  }
+  return "";
 }
 
 function setRunPill(meta){
@@ -312,7 +384,6 @@ function renderToolList(meta){
 
     list.appendChild(item);
   });
-
   if(!selectedTool){
     const first = tools.find(x=>x.stdout_file);
     if(first){
@@ -345,7 +416,7 @@ function setActiveToolUI(tool){
   document.getElementById("termTitle").textContent = tool?.name ? `${tool.name} • stdout` : "stdout";
   document.getElementById("termTitleErr").textContent = tool?.name ? `${tool.name} • stderr` : "stderr";
 
-
+  // Highlights panel
   const hb = document.getElementById("highlightsBox");
   hb.innerHTML = "";
 
@@ -400,7 +471,6 @@ async function renderResults(meta, tool){
   const svcChip = document.getElementById("resServices");
   openChip.textContent = "Open: —";
   svcChip.textContent = "Services: —";
-
 
   if(tool?.parsed_file){
     const parsedHtml = await fetchFile(tool.parsed_file);
@@ -457,9 +527,12 @@ async function renderResults(meta, tool){
         return;
       }
 
-   
+      const genericHtml = renderGenericStructured(tool, parsed);
+      if(genericHtml){
+        hb.innerHTML = genericHtml;
+        return;
+      }
     } catch(e){
-
     }
   }
 
@@ -467,17 +540,15 @@ async function renderResults(meta, tool){
     (tool?.summary && (tool.summary.open_ports || tool.summary.samples || tool.summary.warnings || tool.summary.highlights || tool.summary.summary || tool.summary.detections || tool.summary.open_lines)) || null;
 
   if(Array.isArray(highlights) && highlights.length){
-    hb.innerHTML = `<ul class="pretty-list">` + highlights.slice(0,30).map(x=>(
-      `<li><span class="bullet"></span><span>${escapeHtml(x)}</span></li>`
-    )).join("") + `</ul>`;
+    hb.innerHTML = renderPrettyList(highlights);
   } else {
-    hb.innerHTML = `<div class="empty">No structured results. Use Raw Output / Errors.</div>`;
+    const summaryHtml = renderGenericStructured(tool, null);
+    hb.innerHTML = summaryHtml || `<div class="empty">No structured results. Use Raw Output / Errors.</div>`;
   }
 }
 
 async function refreshLogs(meta){
   const tool = (meta.tools || []).find(x=>x.name===selectedTool);
-
 
 if(selectedStdoutPath){
   const terminal = document.getElementById("terminal");
@@ -488,7 +559,6 @@ if(selectedStdoutPath){
     if(h !== lastContentHash){
       const plain = htmlToText(html).trim();
       lastStdoutPlain = plain;
-
 
       const done = (meta.status || "").toLowerCase() === "done";
       const bothEmpty = !lastStdoutPlain && !lastStderrPlain;

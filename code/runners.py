@@ -25,7 +25,7 @@ TOOLS_DIR = BASE_DIR.parent / "tools"
 try:
     import jc  
 except Exception:
-    jc = None  
+    jc = None 
 
 
 @dataclass
@@ -46,19 +46,13 @@ def _is_root() -> bool:
     except Exception:
         return False
 
-
-# ----------------------------
 # Tool registry
-# ----------------------------
-# Notes:
-# - Prefer JSON / machine-readable formats where supported.
-# - For nmap we emit XML to stdout so we can parse via jc's XML parser.
-# - For tools that require root (raw sockets, deep system checks), we fail fast with a clear error.
+
 TOOLS: Dict[str, Dict[str, Any]] = {
 
-    # ----------------------------
+
     # network scanning
-    # ----------------------------
+
     "Nmap": {
         "cmd": ["nmap", "-sV", "-sC", "-p-", "127.0.0.1", "-oX", "-"],
         "timeout": 1800,
@@ -67,9 +61,8 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "human_hint": "Saved as XML for parsing. Use the Parsed view for highlights."
     },
 
-    # ----------------------------
     # privilege escalation scripts (local tools folder)
-    # ----------------------------
+
     "linpeas": {
         "cmd": ["stdbuf", "-oL", "-eL", "bash", str(TOOLS_DIR / "linpeas.sh"), "-a"],
         "timeout": 1800,
@@ -84,9 +77,8 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "postprocess": {"type": "text", "summarizer": "generic_text"},
     },
 
-    # ----------------------------
     # fast port scanners
-    # ----------------------------
+
     "MasScan": {
         "cmd": ["masscan", "127.0.0.1", "-p1-65535", "--rate", "1000"],
         "timeout": 600,
@@ -94,10 +86,8 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "postprocess": {"type": "text", "summarizer": "masscan_text"},
     },
 
-
-    # ----------------------------
     # web vulnerability scanners
-    # ----------------------------
+
     "nikto": {
         "cmd": ["nikto", "-h", BASE_URL],
         "timeout": 3600
@@ -116,9 +106,9 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "requires_root": False,
         "postprocess": {"type": "json", "summarizer": "wpscan_json"},
     },
-    # ----------------------------
+
     # secrets scanning
-    # ----------------------------
+
     "Trufflehog": {
         "cmd": ["trufflehog", "filesystem", "."],
         "timeout": 3600,
@@ -126,9 +116,8 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "postprocess": {"type": "text", "summarizer": "generic_text"},
     },
 
-    # ----------------------------
     # host security scanners
-    # ----------------------------
+
     "Lynis": {
         "cmd": ["lynis", "audit", "system", "--pentest", "--quiet"],
         "timeout": 3600,
@@ -159,9 +148,8 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "postprocess": {"type": "text", "summarizer": "clamav_text"},
     },
 
-    # ----------------------------
-    # code scanners (prefer machine-readable output)
-    # ----------------------------
+  
+    # code scanners 
     "Bandit": {
         "cmd": ["bandit", "-r", SCAN_DIR, "-f", "json"],
         "timeout": 1800,
@@ -212,16 +200,13 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     }
 }
 
-
-# ----------------------------
 # tool availability
-# ----------------------------
+
 def tool_available(cmd: List[str]) -> Tuple[bool, str]:
     if not cmd:
         return False, "empty command"
 
     exe = cmd[0]
-
 
     if exe == "bash":
         if len(cmd) >= 2 and cmd[1] in ("-lc", "-c"):
@@ -237,7 +222,6 @@ def tool_available(cmd: List[str]) -> Tuple[bool, str]:
 
         return False, "invalid bash command"
 
-
     if shutil.which(exe) is None:
         return False, f"{exe} not installed"
 
@@ -248,16 +232,13 @@ def available_tools_config() -> Dict[str, Tuple[bool, str]]:
     result: Dict[str, Tuple[bool, str]] = {}
     for name, tool in TOOLS.items():
         ok, reason = tool_available(tool["cmd"])
-       
         if ok and tool.get("requires_root") and not _is_root():
             ok, reason = True, "requires sudo/root"
         result[name] = (ok, reason)
     return result
 
-
-# ----------------------------
 # postprocessing + summaries
-# ----------------------------
+
 def _safe_write_json(path: Path, data: Any) -> None:
     try:
         path.write_text(json_dumps(data), encoding="utf-8")
@@ -288,6 +269,8 @@ def _summarize(name: str, raw_stdout: str, parsed: Any) -> Optional[Dict[str, An
             return summarize_wpscan(parsed)
         if name == "WhatWeb":
             return summarize_whatweb(raw_stdout)
+        if name == "dalfox":
+            return summarize_dalfox(raw_stdout)
         if name == "Lynis":
             return summarize_lynis(raw_stdout)
         if name == "Rkhunter":
@@ -317,9 +300,21 @@ def summarize_masscan(s: str) -> Dict[str, Any]:
 
 
 def summarize_whatweb(s: str) -> Dict[str, Any]:
-    
     lines = [ln.strip() for ln in strip_ansi(s).splitlines() if ln.strip()]
     return {"detections": lines[:5], "lines": len(lines)}
+
+
+def summarize_dalfox(s: str) -> Dict[str, Any]:
+    lines = [ln.strip() for ln in strip_ansi(s).splitlines() if ln.strip()]
+    useful = []
+    for ln in lines:
+        if ln.startswith(("🎯", "🏁", "🖥", "⛏", "⏱", "📤", "🕰", "[*]", "[I]", "[V]", "[W]")):
+            useful.append(ln)
+            continue
+        low = ln.lower()
+        if "target" in low or "testing points" in low or "content-type" in low or "finish scan" in low or "issues:" in low or "started at" in low:
+            useful.append(ln)
+    return {"highlights": useful[:20], "lines": len(lines)}
 
 
 def summarize_lynis(s: str) -> Dict[str, Any]:
@@ -347,7 +342,6 @@ def summarize_chkrootkit(s: str) -> Dict[str, Any]:
 
 
 def summarize_clamav(s: str) -> Dict[str, Any]:
-    
     lines = [ln.strip() for ln in strip_ansi(s).splitlines() if ln.strip()]
     tail = lines[-30:] if len(lines) > 30 else lines
     interesting = [ln for ln in tail if ":" in ln]
@@ -373,7 +367,6 @@ def summarize_bandit(obj: Any) -> Dict[str, Any]:
 
 
 def summarize_semgrep(obj: Any) -> Dict[str, Any]:
-    
     results = obj.get("results", []) if isinstance(obj, dict) else []
     by_sev: Dict[str, int] = {}
     for r in results:
@@ -383,7 +376,6 @@ def summarize_semgrep(obj: Any) -> Dict[str, Any]:
 
 
 def summarize_trivy(obj: Any) -> Dict[str, Any]:
-    
     results = obj.get("Results", []) if isinstance(obj, dict) else []
     by_sev: Dict[str, int] = {}
     total = 0
@@ -397,17 +389,14 @@ def summarize_trivy(obj: Any) -> Dict[str, Any]:
 
 
 def summarize_wpscan(obj: Any) -> Dict[str, Any]:
-    
     if not isinstance(obj, dict):
         return {"note": "wpscan output not parsed"}
     version = obj.get("version") or obj.get("wp_scan_version") or None
     vulns = 0
     interesting = []
-    
     for k in ("vulnerabilities", "interesting_findings", "plugins", "themes"):
         if k in obj:
             interesting.append(k)
-    
     def count_vuln(x: Any) -> int:
         if isinstance(x, list):
             return len(x)
@@ -423,6 +412,7 @@ def summarize_nuclei_jsonl(raw: str) -> Dict[str, Any]:
     by_sev: Dict[str, int] = {}
     total = 0
     samples: List[str] = []
+    info_lines: List[str] = []
     for ln in raw.splitlines():
         ln = ln.strip()
         if not ln:
@@ -430,6 +420,9 @@ def summarize_nuclei_jsonl(raw: str) -> Dict[str, Any]:
         try:
             j = json.loads(ln)
         except Exception:
+            low = ln.lower()
+            if ("matches found" in low or "templates loaded for current scan" in low or "targets loaded for current scan" in low or "executing" in low or "templates clustered" in low or "scan completed" in low):
+                info_lines.append(ln)
             continue
         total += 1
         sev = (j.get("severity") or "unknown").upper()
@@ -439,11 +432,12 @@ def summarize_nuclei_jsonl(raw: str) -> Dict[str, Any]:
             name = j.get("info", {}).get("name") if isinstance(j.get("info"), dict) else None
             host = j.get("host") or j.get("matched-at") or ""
             samples.append(f"{sev}: {name or tmpl} @ {host}".strip())
+    if total == 0 and info_lines:
+        samples = info_lines[:10]
     return {"findings": total, "severity": by_sev, "samples": samples}
 
 
 def summarize_zmap(obj: Any) -> Dict[str, Any]:
-    
     if isinstance(obj, dict):
         ips = obj.get("ips") or []
         if isinstance(ips, list):
@@ -462,7 +456,6 @@ def summarize_zmap(obj: Any) -> Dict[str, Any]:
 
 
 def summarize_nmap(parsed_xml: Any) -> Dict[str, Any]:
-   
     if isinstance(parsed_xml, dict) and "open_ports" in parsed_xml and "open_count" in parsed_xml:
         open_ports = parsed_xml.get("open_ports") or []
         if isinstance(open_ports, list):
@@ -480,7 +473,6 @@ def summarize_nmap(parsed_xml: Any) -> Dict[str, Any]:
                 pretty.append(f"{portid}/{proto} {extra}".strip())
             return {"open_ports": pretty[:30], "open_count": int(parsed_xml.get("open_count") or len(open_ports))}
         return {"open_ports": [], "open_count": int(parsed_xml.get("open_count") or 0)}
-
 
     if not isinstance(parsed_xml, dict):
         return {"open_ports": []}
@@ -519,7 +511,6 @@ def parse_nmap_xml(raw_xml: str) -> Optional[Dict[str, Any]]:
     raw_xml = (raw_xml or "").strip()
     if not raw_xml:
         return None
-    
     if "<?xml" in raw_xml:
         raw_xml = raw_xml[raw_xml.index("<?xml"):]
     try:
@@ -605,9 +596,27 @@ def parse_csv_single_col(raw: str) -> List[str]:
     return [x for x in out if x]
 
 
-# ----------------------------
+def _pick_primary_output(name: str, raw_stdout: str, raw_stderr: str, postprocess: Dict[str, Any]) -> str:
+    """Choose the stream that contains the useful scanner output for parsing/summaries."""
+    stdout = raw_stdout or ""
+    stderr = raw_stderr or ""
+
+    if stdout.strip():
+        return stdout
+
+    if not stderr.strip():
+        return stdout
+    if name in {"dalfox", "Nuclei", "Bandit", "Semgrep"}:
+        return stderr
+
+    pp_type = postprocess.get("type")
+    if pp_type in {"text", "json", "jsonl", "jc"}:
+        return stderr
+
+    return stdout
+
 # tool runner
-# ----------------------------
+
 def _parse_with_jc(parser: str, raw_stdout: str) -> Optional[Any]:
     if jc is None:
         return None
@@ -634,7 +643,6 @@ def run_tool(name: str, tool: Dict[str, Any], out_dir: Path) -> ToolResult:
     rc = 0
     parsed_file_rel: Optional[str] = None
     summary: Optional[Dict[str, Any]] = None
-
     effective_cmd = cmd
     used_sudo = False
     if requires_root and not _is_root():
@@ -687,29 +695,27 @@ def run_tool(name: str, tool: Dict[str, Any], out_dir: Path) -> ToolResult:
             raw_err = str(e)
             err.write(raw_err)
 
-
     pp = tool.get("postprocess") or {}
     parsed_obj: Any = None
+    parse_source = _pick_primary_output(name, raw_out, raw_err, pp)
 
     if name == "Nmap":
-        parsed_obj = parse_nmap_xml(raw_out)
+        parsed_obj = parse_nmap_xml(parse_source)
     elif name == "ZMap":
-        ips = parse_csv_single_col(raw_out)
+        ips = parse_csv_single_col(parse_source)
         parsed_obj = {"responses": len(ips), "ips": ips[:200]}
 
-   
     if parsed_obj is None and pp.get("type") == "jc":
         parser = pp.get("parser")
         if isinstance(parser, str):
-            parsed_obj = _parse_with_jc(parser, raw_out)
+            parsed_obj = _parse_with_jc(parser, parse_source)
     elif pp.get("type") == "json":
         import json
         try:
-            parsed_obj = json.loads(raw_out) if raw_out.strip() else None
+            parsed_obj = json.loads(parse_source) if parse_source.strip() else None
         except Exception:
             parsed_obj = None
     elif pp.get("type") == "jsonl":
-
         parsed_obj = None
 
     if parsed_obj is not None:
@@ -717,7 +723,7 @@ def run_tool(name: str, tool: Dict[str, Any], out_dir: Path) -> ToolResult:
         _safe_write_json(parsed_path, parsed_obj)
         parsed_file_rel = str(parsed_path.relative_to(out_dir))
 
-    summary = _summarize(name, raw_out, parsed_obj)
+    summary = _summarize(name, parse_source, parsed_obj)
     if used_sudo and summary is not None:
         summary.setdefault("note", "executed via sudo")
 
@@ -735,9 +741,8 @@ def run_tool(name: str, tool: Dict[str, Any], out_dir: Path) -> ToolResult:
     )
 
 
-# ----------------------------
 # scan execution
-# ----------------------------
+
 def run_scan(run_id: str, tools: List[str]) -> Dict[str, Any]:
     out_dir = run_dir(run_id)
     out_dir.mkdir(parents=True, exist_ok=True)
